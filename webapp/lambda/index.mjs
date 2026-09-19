@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { strToU8, unzipSync, zipSync } from "fflate";
 import { convert } from "./lib/converter.js";
@@ -8,7 +8,8 @@ import { extractTemplateSource } from "./lib/zipsource.js";
 
 const APP_NAME_RE = /^[a-z_][a-z0-9_]*$/;
 const BUCKET = process.env.BUCKET_NAME;
-const KEY_PREFIX = "outputs/";
+const UPLOAD_PREFIX = "uploads/";
+const OUTPUT_PREFIX = "outputs/";
 
 const s3 = new S3Client({});
 
@@ -20,40 +21,44 @@ function jsonResponse(statusCode, body) {
   };
 }
 
-export const handler = async (event) => {
-  const method = event.requestContext?.http?.method || "GET";
-  if (method !== "POST") {
-    return jsonResponse(405, { error: "POST a multipart/form-data body with 'file' and 'app_name'" });
-  }
+// Lambda Function URLs cap request AND response payloads at 6MB, and a binary
+// body like a zip upload gets base64-encoded before that limit is checked
+// (~33% inflation) — so the actual file never goes through this Lambda at all.
+// The browser PUTs it straight to S3 with a presigned URL, and downloads the
+// result the same way; this function only ever sees small JSON.
+async function handleGetUploadUrl() {
+  const key = `${UPLOAD_PREFIX}${randomUUID()}.zip`;
+  const uploadUrl = await getSignedUrl(
+    s3,
+    new PutObjectCommand({ Bucket: BUCKET, Key: key, ContentType: "application/zip" }),
+    { expiresIn: 300 }
+  );
+  return jsonResponse(200, { uploadUrl, key });
+}
 
-  let form;
-  try {
-    const bodyBuffer = event.isBase64Encoded
-      ? Buffer.from(event.body || "", "base64")
-      : Buffer.from(event.body || "", "utf-8");
-    const request = new Request("http://templify.local/", {
-      method: "POST",
-      headers: event.headers || {},
-      body: bodyBuffer,
-    });
-    form = await request.formData();
-  } catch {
-    return jsonResponse(400, { error: "Expected multipart/form-data with a 'file' field" });
-  }
+async function handleConvert(payload) {
+  const key = String(payload.key || "");
+  const appName = String(payload.app_name || "website").trim();
 
-  const file = form.get("file");
-  const appName = String(form.get("app_name") || "website").trim();
-
-  if (!file || typeof file.arrayBuffer !== "function") {
-    return jsonResponse(400, { error: "Missing 'file' (the template .zip)" });
+  if (!key.startsWith(UPLOAD_PREFIX) || key.includes("..")) {
+    return jsonResponse(400, { error: "Invalid or missing 'key'" });
   }
   if (!APP_NAME_RE.test(appName)) {
     return jsonResponse(400, { error: "App name must look like a Python identifier, e.g. 'website'" });
   }
 
+  let zipBytes;
+  try {
+    const obj = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: key }));
+    zipBytes = await obj.Body.transformToByteArray();
+  } catch (err) {
+    return jsonResponse(400, { error: `Could not read the uploaded file: ${err.message}` });
+  }
+  s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key })).catch(() => {});
+
   let entries;
   try {
-    entries = unzipSync(new Uint8Array(await file.arrayBuffer()));
+    entries = unzipSync(zipBytes);
   } catch (err) {
     return jsonResponse(400, { error: `Could not read zip file: ${err.message}` });
   }
@@ -89,22 +94,39 @@ export const handler = async (event) => {
 
   const zipped = zipSync(out, { level: 6 });
 
-  // Function URL responses are capped at 6 MB, so the zip goes to S3 and we
-  // hand back a short-lived link instead of the bytes themselves.
-  const key = `${KEY_PREFIX}${randomUUID()}-${appName}-django.zip`;
+  const outputKey = `${OUTPUT_PREFIX}${randomUUID()}-${appName}-django.zip`;
   await s3.send(
     new PutObjectCommand({
       Bucket: BUCKET,
-      Key: key,
+      Key: outputKey,
       Body: zipped,
       ContentType: "application/zip",
       ContentDisposition: `attachment; filename="${appName}-django.zip"`,
     })
   );
 
-  const downloadUrl = await getSignedUrl(s3, new GetObjectCommand({ Bucket: BUCKET, Key: key }), {
+  const downloadUrl = await getSignedUrl(s3, new GetObjectCommand({ Bucket: BUCKET, Key: outputKey }), {
     expiresIn: 300,
   });
 
   return jsonResponse(200, { downloadUrl });
+}
+
+export const handler = async (event) => {
+  const method = event.requestContext?.http?.method || "GET";
+  if (method !== "POST") {
+    return jsonResponse(405, { error: "POST a JSON body with 'action': 'get-upload-url' or 'convert'" });
+  }
+
+  let payload;
+  try {
+    const raw = event.isBase64Encoded ? Buffer.from(event.body || "", "base64").toString("utf-8") : event.body || "{}";
+    payload = JSON.parse(raw);
+  } catch {
+    return jsonResponse(400, { error: "Expected a JSON body" });
+  }
+
+  if (payload.action === "get-upload-url") return handleGetUploadUrl();
+  if (payload.action === "convert") return handleConvert(payload);
+  return jsonResponse(400, { error: "Unknown or missing 'action'" });
 };

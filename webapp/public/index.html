@@ -154,19 +154,35 @@ form.addEventListener("submit", async (e) => {
     return;
   }
 
-  const body = new FormData();
-  body.append("file", file);
-  body.append("app_name", appName);
-
   submitBtn.disabled = true;
-  setStatus("Converting…");
 
   try {
-    const res = await fetch(CONVERT_URL, { method: "POST", body });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data.error || `Server returned ${res.status}`);
-    }
+    setStatus("Requesting upload slot…");
+    const slotRes = await fetch(CONVERT_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "get-upload-url" }),
+    });
+    const slot = await slotRes.json().catch(() => ({}));
+    if (!slotRes.ok) throw new Error(slot.error || `Server returned ${slotRes.status}`);
+
+    setStatus("Uploading template…");
+    const putRes = await fetch(slot.uploadUrl, {
+      method: "PUT",
+      headers: { "content-type": "application/zip" },
+      body: file,
+    });
+    if (!putRes.ok) throw new Error(`Upload failed (${putRes.status})`);
+
+    setStatus("Converting…");
+    const convRes = await fetch(CONVERT_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "convert", key: slot.key, app_name: appName }),
+    });
+    const data = await convRes.json().catch(() => ({}));
+    if (!convRes.ok) throw new Error(data.error || `Server returned ${convRes.status}`);
+
     const a = document.createElement("a");
     a.href = data.downloadUrl;
     a.download = `${appName}-django.zip`;
