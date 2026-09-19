@@ -46,3 +46,25 @@ Then:
 ```bash
 python -m pytest tests/
 ```
+
+## Web app (`webapp/`)
+
+Same converter, ported to JavaScript, as an upload-a-zip-get-a-zip-back site
+deployable on Cloudflare Pages — no server to run, no Python involved.
+
+- `webapp/public/index.html` — the upload form.
+- `webapp/functions/api/convert.js` — a Pages Function: unzips the upload,
+  runs the same diff/rewrite logic (`webapp/functions/_lib/`), rezips the
+  generated Django app, and streams it back.
+
+Local dev:
+
+```bash
+cd webapp
+npm install
+npm run dev   # wrangler pages dev public
+```
+
+Deploy: connect the repo in the Cloudflare Pages dashboard with **root
+directory** set to `webapp` (build command empty, output directory `public`),
+or run `npx wrangler pages deploy public` from `webapp/`.

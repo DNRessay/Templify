@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Templify</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #2a2f3a;
+    --text: #e8eaed;
+    --muted: #9aa2b1;
+    --accent: #6ee7b7;
+    --accent-dark: #10b981;
+    --error: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+  }
+  .card {
+    width: 100%;
+    max-width: 480px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px;
+  }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  p.subtitle { margin: 0 0 28px; color: var(--muted); font-size: 14px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  input[type="text"] {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #0c0e12;
+    color: var(--text);
+    font-size: 14px;
+    margin-bottom: 20px;
+  }
+  .dropzone {
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 28px 16px;
+    text-align: center;
+    cursor: pointer;
+    margin-bottom: 20px;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .dropzone.drag { border-color: var(--accent); background: rgba(110, 231, 183, 0.06); }
+  .dropzone p { margin: 4px 0; color: var(--muted); font-size: 13px; }
+  .dropzone .filename { color: var(--text); font-weight: 600; font-size: 14px; }
+  input[type="file"] { display: none; }
+  button {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent-dark);
+    color: #05221a;
+    font-weight: 600;
+    font-size: 15px;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .status { margin-top: 16px; font-size: 13px; text-align: center; min-height: 18px; }
+  .status.error { color: var(--error); }
+  .status.ok { color: var(--accent); }
+  footer { margin-top: 24px; text-align: center; font-size: 12px; color: var(--muted); }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Templify</h1>
+  <p class="subtitle">Upload a Bootstrap HTML template (.zip). Get back a ready-to-drop-in Django app.</p>
+
+  <form id="convert-form">
+    <label for="app_name">Django app name</label>
+    <input type="text" id="app_name" name="app_name" value="website" pattern="[a-z_][a-z0-9_]*" required>
+
+    <label>Template .zip</label>
+    <div class="dropzone" id="dropzone">
+      <p class="filename" id="filename">Drop a .zip here or click to browse</p>
+      <p>Bootstrap template with an <code>assets/</code> folder</p>
+      <input type="file" id="file" name="file" accept=".zip">
+    </div>
+
+    <button type="submit" id="submit-btn">Convert to Django</button>
+    <div class="status" id="status"></div>
+  </form>
+
+  <footer>Runs entirely on Cloudflare Pages Functions — nothing is stored.</footer>
+</div>
+
+<script>
+const form = document.getElementById("convert-form");
+const fileInput = document.getElementById("file");
+const dropzone = document.getElementById("dropzone");
+const filenameEl = document.getElementById("filename");
+const statusEl = document.getElementById("status");
+const submitBtn = document.getElementById("submit-btn");
+
+dropzone.addEventListener("click", () => fileInput.click());
+
+fileInput.addEventListener("change", () => {
+  if (fileInput.files[0]) filenameEl.textContent = fileInput.files[0].name;
+});
+
+["dragenter", "dragover"].forEach((evt) =>
+  dropzone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    dropzone.classList.add("drag");
+  })
+);
+["dragleave", "drop"].forEach((evt) =>
+  dropzone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    dropzone.classList.remove("drag");
+  })
+);
+dropzone.addEventListener("drop", (e) => {
+  const dropped = e.dataTransfer.files[0];
+  if (dropped) {
+    fileInput.files = e.dataTransfer.files;
+    filenameEl.textContent = dropped.name;
+  }
+});
+
+function setStatus(message, kind) {
+  statusEl.textContent = message;
+  statusEl.className = "status" + (kind ? " " + kind : "");
+}
+
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const file = fileInput.files[0];
+  const appName = document.getElementById("app_name").value.trim();
+
+  if (!file) {
+    setStatus("Choose a .zip file first.", "error");
+    return;
+  }
+
+  const body = new FormData();
+  body.append("file", file);
+  body.append("app_name", appName);
+
+  submitBtn.disabled = true;
+  setStatus("Converting…");
+
+  try {
+    const res = await fetch("/api/convert", { method: "POST", body });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Server returned ${res.status}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${appName}-django.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setStatus("Done — download started.", "ok");
+  } catch (err) {
+    setStatus(err.message, "error");
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
