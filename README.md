@@ -55,12 +55,28 @@ Frontend and backend are deployed separately:
 - **Frontend** — `webapp/public/index.html`, a static upload form deployed to
   Cloudflare Pages: https://templify-auf.pages.dev
 - **Backend** — `webapp/lambda/`, an AWS Lambda function (Node 20) behind a
-  Function URL. It unzips the upload, runs the same diff/rewrite logic
-  (`webapp/lambda/lib/`), rezips the generated Django app, uploads it to a
-  private S3 bucket (`templify-outputs-<account-id>`, objects auto-expire
-  after 1 day), and returns a short-lived (5 min) presigned download link.
-  This avoids the Lambda Function URL's 6 MB response cap, which the zip
-  output can exceed for larger templates.
+  Function URL, driven entirely by small JSON requests:
+  1. `{"action":"get-upload-url"}` → a presigned S3 PUT URL; the browser
+     uploads the template zip straight to S3.
+  2. `{"action":"convert","key":...,"app_name":...}` → the Lambda reads that
+     object from S3, runs the diff/rewrite logic (`webapp/lambda/lib/`),
+     deletes the input, uploads the generated Django app zip, and returns a
+     presigned GET URL.
+
+  Both the upload and the download go straight to a private S3 bucket
+  (`templify-outputs-<account-id>`, everything under it expires after 1 day)
+  — the zip bytes never pass through the Lambda Function URL itself. This
+  matters because Function URLs cap **both** request and response payloads
+  at 6 MB, and a binary body counts against that limit post-base64 (~33%
+  inflation), so even a ~4.5 MB template zip would otherwise get rejected
+  at the edge before the function ever runs.
+
+  **Non-obvious IAM gotcha:** a `NONE`-auth Function URL needs *two*
+  resource-policy statements — `lambda:InvokeFunctionUrl` *and*
+  `lambda:InvokeFunction` (the latter scoped with the
+  `lambda:InvokedViaFunctionUrl` condition). Missing the second one gives a
+  403 with no CloudWatch trace, since AWS rejects it before invoking the
+  function. See [Control access to Lambda function URLs](https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html).
 
 Local dev (frontend only — the Lambda backend is invoked directly, no local
 emulation):
