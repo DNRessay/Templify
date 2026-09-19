@@ -5,10 +5,6 @@
   "scripts": {
     "dev": "wrangler pages dev public"
   },
-  "dependencies": {
-    "fflate": "^0.8.2",
-    "linkedom": "^0.18.5"
-  },
   "devDependencies": {
     "wrangler": "^3.90.0"
   }

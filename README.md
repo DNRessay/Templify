@@ -49,15 +49,21 @@ python -m pytest tests/
 
 ## Web app (`webapp/`)
 
-Same converter, ported to JavaScript, as an upload-a-zip-get-a-zip-back site
-deployable on Cloudflare Pages — no server to run, no Python involved.
+Same converter, ported to JavaScript, as an upload-a-zip-get-a-zip-back site.
+Frontend and backend are deployed separately:
 
-- `webapp/public/index.html` — the upload form.
-- `webapp/functions/api/convert.js` — a Pages Function: unzips the upload,
-  runs the same diff/rewrite logic (`webapp/functions/_lib/`), rezips the
-  generated Django app, and streams it back.
+- **Frontend** — `webapp/public/index.html`, a static upload form deployed to
+  Cloudflare Pages: https://templify-auf.pages.dev
+- **Backend** — `webapp/lambda/`, an AWS Lambda function (Node 20) behind a
+  Function URL. It unzips the upload, runs the same diff/rewrite logic
+  (`webapp/lambda/lib/`), rezips the generated Django app, uploads it to a
+  private S3 bucket (`templify-outputs-<account-id>`, objects auto-expire
+  after 1 day), and returns a short-lived (5 min) presigned download link.
+  This avoids the Lambda Function URL's 6 MB response cap, which the zip
+  output can exceed for larger templates.
 
-Local dev:
+Local dev (frontend only — the Lambda backend is invoked directly, no local
+emulation):
 
 ```bash
 cd webapp
@@ -65,6 +71,15 @@ npm install
 npm run dev   # wrangler pages dev public
 ```
 
-Deploy: connect the repo in the Cloudflare Pages dashboard with **root
-directory** set to `webapp` (build command empty, output directory `public`),
-or run `npx wrangler pages deploy public` from `webapp/`.
+Deploying changes:
+
+- Frontend: `.github/workflows/deploy-webapp.yml` — auto-deploys to
+  Cloudflare Pages on push to `main` touching `webapp/**` (needs
+  `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` repo secrets).
+- Backend: `.github/workflows/deploy-lambda.yml` — repackages and pushes new
+  code to the `templify-convert` Lambda on push to `main` touching
+  `webapp/lambda/**` (needs `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
+  `AWS_REGION` repo secrets; the function lives in `eu-west-1`, so
+  `AWS_REGION` must match). This only updates the function's code — the
+  IAM role, S3 bucket, and Function URL were created once by hand and
+  aren't managed by CI.

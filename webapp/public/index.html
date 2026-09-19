@@ -100,10 +100,12 @@
     <div class="status" id="status"></div>
   </form>
 
-  <footer>Runs entirely on Cloudflare Pages Functions — nothing is stored.</footer>
+  <footer>Converted on AWS Lambda. Downloads auto-expire from storage within a day.</footer>
 </div>
 
 <script>
+const CONVERT_URL = "https://dmt46thjvn6fyzwxfmpfwae7li0ccmyc.lambda-url.eu-west-1.on.aws/";
+
 const form = document.getElementById("convert-form");
 const fileInput = document.getElementById("file");
 const dropzone = document.getElementById("dropzone");
@@ -160,20 +162,17 @@ form.addEventListener("submit", async (e) => {
   setStatus("Converting…");
 
   try {
-    const res = await fetch("/api/convert", { method: "POST", body });
+    const res = await fetch(CONVERT_URL, { method: "POST", body });
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
       throw new Error(data.error || `Server returned ${res.status}`);
     }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
+    a.href = data.downloadUrl;
     a.download = `${appName}-django.zip`;
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
     setStatus("Done — download started.", "ok");
   } catch (err) {
     setStatus(err.message, "error");
